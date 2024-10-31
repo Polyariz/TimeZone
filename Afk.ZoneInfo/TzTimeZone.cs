@@ -794,5 +794,125 @@ namespace Afk.ZoneInfo
             return adjustmentRules.ToArray();
         }
          * */
+
+            #region Find Next UTC transition
+
+/// <summary>
+/// Gets the date of the next timezone transition in UTC
+/// </summary>
+public static DateTime? GetNextTransitionUtc(TzTimeZone timeZone, DateTime utcDate)
+{
+    if (timeZone == null)
+        throw new ArgumentNullException(nameof(timeZone));
+    if (utcDate.Kind != DateTimeKind.Utc)
+        throw new ArgumentException("Date must be in UTC", nameof(utcDate));
+    if (utcDate >= DateTime.MaxValue.AddDays(-1))
+        return null;
+
+    var rules = timeZone.ZoneRules;
+    if (utcDate < rules[0].StartZone.UtcDate || utcDate >= rules[^1].EndZone.UtcDate)
+        throw new ArgumentOutOfRangeException(
+            nameof(utcDate),
+            $"Date {utcDate} is outside of zone range [{rules[0].StartZone.UtcDate} - {rules[^1].EndZone.UtcDate}]"
+        );
+
+    // Find current rule
+    var currentRule = FindCurrentRule(rules, utcDate);
+    if (currentRule == null)
+        throw new InvalidOperationException($"Unable to find timezone rule for date {utcDate}");
+
+    // Check the end of current rule
+    if (currentRule.EndZone.UtcDate == DateTime.MaxValue)
+        return null;
+    if (currentRule.EndZone.UtcDate > utcDate)
+        return currentRule.EndZone.UtcDate;
+
+    // Search for next transition in current and next year
+    var localDate = timeZone.ToLocalTime(utcDate);
+    var year = localDate.Year;
+    var transitions = timeZone.GetDayChangeTime(year)
+        .Concat(timeZone.GetDayChangeTime(year + 1))
+        .Select(d => timeZone.ToUniversalTime(d))
+        .Where(d => d > utcDate)
+        .OrderBy(d => d)
+        .FirstOrDefault();
+
+    return transitions == default(DateTime) ? null : transitions;
+}
+
+private static TzTimeZoneRule FindCurrentRule(List<TzTimeZoneRule> rules, DateTime utcDate)
+{
+    int left = 0;
+    int right = rules.Count - 1;
+
+    while (left <= right)
+    {
+        int mid = (left + right) / 2;
+        var rule = rules[mid];
+
+        if (utcDate >= rule.StartZone.UtcDate && utcDate < rule.EndZone.UtcDate)
+            return rule;
+
+        if (utcDate < rule.StartZone.UtcDate)
+            right = mid - 1;
+        else
+            left = mid + 1;
+    }
+
+    return null;
+}
+ 
+#endregion
+
+public static TimeSpan? GetOffsetAtUtc(TzTimeZone timeZone, DateTime utcDate)
+{
+    if (timeZone == null)
+        throw new ArgumentNullException(nameof(timeZone));
+
+    if (utcDate.Kind != DateTimeKind.Utc)
+        throw new ArgumentException("Date must be in UTC", nameof(utcDate));
+
+    // Find rule active for the specified date
+    var currentRule = timeZone.ZoneRules.FirstOrDefault(z =>
+        utcDate >= z.StartZone.UtcDate &&
+        utcDate < z.EndZone.UtcDate);
+
+    if (currentRule == null)
+        throw new ArgumentOutOfRangeException(nameof(utcDate),
+            "Date is outside of timezone's valid range");
+
+    // If rule doesn't use additional rules (fixed offset)
+    if (currentRule.RuleName == "-")
+        return currentRule.GmtOffset;
+
+    // If rule uses fixed standard offset
+    if (!TzTimeInfo.Rules.ContainsKey(currentRule.RuleName))
+        return currentRule.GmtOffset + currentRule.FixedStandardOffset;
+
+    // Find applicable rule for the specified date
+    var rules = TzTimeInfo.Rules[currentRule.RuleName];
+    var applicableRule = TzTimeZone.GetRuleAtPoint(rules, utcDate, currentRule.GmtOffset, currentRule.StartZone.StandardOffset);
+
+    // Return total offset: base + standard
+    // If applicable rule not found, use standard offset from zone start
+    var standardOffset = applicableRule?.StandardOffset ?? currentRule.StartZone.StandardOffset;
+    return currentRule.GmtOffset + standardOffset;
+}
+
+public static DateTime GetEarliestDateUtc(TzTimeZone timeZone)
+{
+    if (timeZone == null)
+        throw new ArgumentNullException(nameof(timeZone));
+
+    var earliestRule = timeZone.ZoneRules
+        .Where(z => z.StartZone.UtcDate > DateTime.MinValue)
+        .OrderBy(z => z.StartZone.UtcDate)
+        .FirstOrDefault();
+
+    if (earliestRule == null)
+        return DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
+
+    return earliestRule.StartZone.UtcDate;
+}
     }
 }
