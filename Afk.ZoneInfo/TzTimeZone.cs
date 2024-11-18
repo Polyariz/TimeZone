@@ -272,41 +272,59 @@ namespace Afk.ZoneInfo
         /// <param name="datetime">A date and time.</param>
         /// <param name="optimize">Value which indicates whether to optimize the convert</param>
         /// <returns>A <see cref="DateTime"/> object whose value is the Coordinated Universal Time (UTC) that corresponds to time.</returns>
-        public DateTime ToUniversalTime(DateTime datetime, bool optimize = false)
+       public DateTime ToUniversalTime(DateTime datetime, bool optimize = false)
+{
+    if (datetime.Kind == DateTimeKind.Unspecified)
+        throw new ArgumentException("Unspecified date time kind", nameof(datetime));
+    if (datetime.Kind == DateTimeKind.Utc)
+        return datetime;
+
+    if (!ZoneRules.Any(z =>
+        datetime >= z.StartZone.ToLocalTime() &&
+        (datetime < z.EndZone.ToLocalTime() || datetime == z.EndZone.ToLocalTime())))
+    {
+        // Проверяем время на час раньше для случаев перехода DST
+        var prevHour = datetime.AddHours(-1);
+        if (!ZoneRules.Any(z =>
+            prevHour >= z.StartZone.ToLocalTime() &&
+            prevHour < z.EndZone.ToLocalTime()))
         {
-            if (datetime.Kind == DateTimeKind.Unspecified) throw new ArgumentException("Unspecified date time kind", nameof(datetime));
-
-            if (datetime.Kind == DateTimeKind.Utc) return datetime;
-
-            // Check that local date is cover by zone
-            if (!ZoneRules.Any(z => datetime >= z.StartZone.ToLocalTime() && datetime < z.EndZone.ToLocalTime()))
-            {
-                throw new ArgumentOutOfRangeException(nameof(datetime));
-            }
-
-            if (optimize)
-            {
-                UpdateDateChange(datetime.Year);
-                List<TzTimeZoneRuleDate> knownDate = _zoneDates[datetime.Year];
-                if (knownDate.Any())
-                {
-                    foreach (var elt in knownDate)
-                    {
-                        if ((datetime.Kind == DateTimeKind.Utc && datetime < elt.UtcDate) ||
-                            (datetime.Kind == DateTimeKind.Local && datetime < elt.ToLocalTime()))
-                            return TzUtilities.GetDateTime(datetime, elt.GmtOffset, elt.StandardOffset, DateTimeKind.Utc);
-                    }
-                }
-            }
-
-            ZoneRuleAssociate zr = GetZoneRule(datetime);
-            Debug.Assert(zr.zoneRule != null);
-
-            TimeSpan gmtOffset = zr.zoneRule.GmtOffset;
-
-            DateTime utcclock = datetime.Add(-gmtOffset - zr.standardOffset);
-            return new DateTime(utcclock.Ticks, DateTimeKind.Utc);
+            throw new ArgumentOutOfRangeException(nameof(datetime));
         }
+    }
+
+    if (optimize)
+    {
+        UpdateDateChange(datetime.Year);
+        List<TzTimeZoneRuleDate> knownDate = _zoneDates[datetime.Year];
+        if (knownDate.Any())
+        {
+            foreach (var elt in knownDate)
+            {
+                if ((datetime.Kind == DateTimeKind.Utc && datetime < elt.UtcDate) ||
+                    (datetime.Kind == DateTimeKind.Local && datetime < elt.ToLocalTime()))
+                    return TzUtilities.GetDateTime(datetime, elt.GmtOffset, elt.StandardOffset, DateTimeKind.Utc);
+            }
+        }
+    }
+
+    // Ищем правило для текущего времени
+    var zr = GetZoneRule(datetime);
+    if (zr.zoneRule == null)
+    {
+        // Если не нашли, используем правило для времени на час раньше
+        zr = GetZoneRule(datetime.AddHours(-1));
+    }
+
+    if (zr.zoneRule == null)
+    {
+        throw new InvalidOperationException($"Unable to find timezone rule for date {datetime}");
+    }
+
+    TimeSpan gmtOffset = zr.zoneRule.GmtOffset;
+    DateTime utcclock = datetime.Add(-gmtOffset - zr.standardOffset);
+    return new DateTime(utcclock.Ticks, DateTimeKind.Utc);
+}
 
         /// <summary>
         /// Returns the local time in the specified time zone that correspond to the specified date in the current time zone.
